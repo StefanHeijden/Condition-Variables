@@ -64,7 +64,8 @@ static void addToBuffer()
 static void * 
 producer (void * arg)
 {
-    while ( item < NROF_ITEMS /* TODO: not all items produced */)
+	// Keep going untill no more items can be produced
+    while ( item < NROF_ITEMS)
     { 
 		// * get the new item
 		rsleep (100);	// simulating all kind of activities...
@@ -72,9 +73,9 @@ producer (void * arg)
 		// * put the item into buffer[]	
 		// follow this pseudocode (according to the ConditionSynchronization lecture):
 		if (position < BUFFER_SIZE){
-			addToBuffer();
 			// mutex-lock;
 			pthread_mutex_lock (&mutex);
+			addToBuffer();
 		}else{// If not wait for buffer to become empty
 			//possible-cv-signals; ---------------wait for buffer to empty
 			pthread_cond_wait (&pcondition, &mutex);
@@ -118,10 +119,12 @@ consumer (void * arg)
 			clearBuffer();
 		}
     }
+    // Make sure all items are taken from the buffer
     if(position > 0) {
-		printf ("There are %d items in buffer left\n", position);
+		// Wait for lock
+		pthread_mutex_lock (&mutex);
+		clearBuffer();
 	}
-    printf ("ddone with loop\n");
 	return (NULL);
 }
 
