@@ -27,17 +27,38 @@ static ITEM buffer[BUFFER_SIZE];
 
 static void rsleep (int t);			// already implemented (see below)
 static ITEM get_next_item (void);	// already implemented (see below)
-static ITEM item = 0; 
-static ITEM pjob; //job to be done
-static ITEM cjob;
-static ITEM pposition = 0;
-static ITEM cposition = BUFFER_SIZE;
-static pthread_mutex_t      pmutex          = PTHREAD_MUTEX_INITIALIZER;
+static int item = 0; // number of items that have been made
+// The position indicates where a new item will be added to the buffer,
+// but can also be used to get the last item in the buffer and check
+// whether the buffer is full.
+static int position = 0; // The position
+// This is the mutex that is used by all producers and the consumer
+// Such that the buffer and current position are only chaged in one
+// thread at a time.
+static pthread_mutex_t      mutex           = PTHREAD_MUTEX_INITIALIZER;
+// This is the condition that signals a item has been added to the buffer
 static pthread_cond_t       pcondition      = PTHREAD_COND_INITIALIZER;
-static pthread_mutex_t      cmutex          = PTHREAD_MUTEX_INITIALIZER;
+// This is the condition that signals a item has been removed from the buffer
 static pthread_cond_t       ccondition      = PTHREAD_COND_INITIALIZER;
 
 
+// * put the item into buffer[]	
+// MAKE SURE MUTEX IS LOCKED BEFORE CALLING!!!
+static void addToBuffer()
+{
+	static ITEM pjob;
+	pjob = get_next_item();
+	// increment number of items, so that we know when to stop
+	// CHECK if items < NROF_ITEMS?
+	item = item+1;
+	// Add next job to the buffer
+	buffer[position] = pjob;
+	position++;
+	// Then signal condition, that says buffer is not empty
+	pthread_cond_signal (&ccondition);
+	// mutex-unlock;
+	pthread_mutex_unlock (&mutex);
+}
 
 /* producer thread */
 static void * 
@@ -45,94 +66,62 @@ producer (void * arg)
 {
     while ( item < NROF_ITEMS /* TODO: not all items produced */)
     { 
-
-	
- 
-        // TODO: 
-        // * get the new item
-	pjob = get_next_item();
-	printf(" job  %d\n", pjob);
-		
-      	rsleep (100);	// simulating all kind of activities...
-		
-	// TODO:
-	// * put the item into buffer[]	
-        // follow this pseudocode (according to the ConditionSynchronization lecture):
-        //      mutex-lock;
-  	pthread_mutex_lock (&pmutex);
-  	printf ("                    locking producer\n");
-
-        //      while not condition-for-this-producer
-	while ( pposition >= BUFFER_SIZE ){
-		
-	// wait-cv;
-        //      critical-section;
-
-        //      possible-cv-signals;
-	pthread_cond_wait (&pcondition, &pmutex);
-	
-	}
-	if (pposition < BUFFER_SIZE){
-		buffer[pposition] = pjob;
-		pposition++;
-		cposition++;
-	}
-        
-        //      mutex-unlock;
-
-	pthread_mutex_unlock (&pmutex);
-  	  printf ("unlocking producer\n");
-	pthread_cond_signal (&ccondition);
-        //
-        // (see condition_test() in condition_basics.c how to use condition variables)
-
-	item = item+1; 
-	//printf(" item %d\n", item);
+		// * get the new item
+		rsleep (100);	// simulating all kind of activities...
+			
+		// * put the item into buffer[]	
+		// follow this pseudocode (according to the ConditionSynchronization lecture):
+		if (position < BUFFER_SIZE){
+			addToBuffer();
+			// mutex-lock;
+			pthread_mutex_lock (&mutex);
+		}else{// If not wait for buffer to become empty
+			//possible-cv-signals; ---------------wait for buffer to empty
+			pthread_cond_wait (&pcondition, &mutex);
+			addToBuffer();
+		}
     }
 	return (NULL);
+}
+
+// Print all item in the buffer
+// MAKE SURE MUTEX IS LOCKED BEFORE CALLING!!!
+static void clearBuffer()
+{
+	// Get all items from the buffer
+	while(position > 0) {
+		rsleep (100); // simulating all kind of activities...
+		printf("%d\n", buffer[position - 1]); // then print item
+		position--;
+	}
+	// Then signal condition, that says buffer is empty
+	pthread_cond_signal (&pcondition);
+	// unlock mutex
+	pthread_mutex_unlock (&mutex);
 }
 
 /* consumer thread */
 static void * 
 consumer (void * arg)
 {
-    while (  true /* TODO: not all items retrieved from buffer[] */)
+	// keep going untill
+    while ( item < NROF_ITEMS)
     {
-        // TODO: 
-		// * get the next item from buffer[]
-	
-		// * print the number to stdout
-	printf(" got job number: %d\n" , cjob);
-        //
-        // follow this pseudocode (according to the ConditionSynchronization lecture):
-        //      mutex-lock;
-
-	pthread_mutex_lock (&cmutex);
-  	printf ("                    locking consumer\n");
-        //      while not condition-for-this-consumer
-	while(buffer[0] == -1){
-		 //          wait-cv;
-		pthread_cond_wait (&ccondition, &cmutex);
-
-	} //while end
-       
-        //      critical-section;
-	
-	if (cposition >  0){
-		cjob = buffer[cposition];	
-		buffer[cposition]= -1;
-		cposition--;
-		pposition--;
-	}
-        //      possible-cv-signals;
-        //      mutex-unlock;
-
-	pthread_mutex_unlock (&cmutex);
-  	  printf ("unlocking consumer\n");
-	pthread_cond_signal (&pcondition);
-		
-        rsleep (100);		// simulating all kind of activities...
+		// If there is an item in the buffer
+		if(position > 0){
+			// Wait for lock
+			pthread_mutex_lock (&mutex);
+			clearBuffer();
+		// If there is no item in the buffer wait for cond. var
+		}else{
+			pthread_cond_wait (&ccondition, &mutex);
+			clearBuffer();
+		}
     }
+    if(position > 0) {
+		printf ("There are %d items in buffer left\n", position);
+	}
+    printf ("ddone with loop\n");
 	return (NULL);
 }
 
@@ -155,7 +144,7 @@ int main (void)
 
     // * wait until all threads are finished  
 	for(int j=0; j<NROF_PRODUCERS; j++) {
-  	pthread_join (prod[j], NULL);
+		pthread_join (prod[j], NULL);
 	}
 	
 	pthread_join (cons, NULL);
@@ -254,7 +243,6 @@ get_next_item(void)
 	    }
 	}
     jobs[found] = true;
-			
 	pthread_mutex_unlock (&job_mutex);
 	return (found);
 }
